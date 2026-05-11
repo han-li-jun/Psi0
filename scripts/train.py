@@ -19,8 +19,11 @@ if TYPE_CHECKING:
 from psi.utils import batch_str_to_tensor, seed_everything, initialize_overwatch, nice, flatten
 from psi.trainers import Trainer
 
+# 对 Python 标准 logging 的封装，专门为分布式训练设计的日志系统。 简单来说就是让多卡训练时只有一个进程打印日志，不会乱
 overwatch = initialize_overwatch(__name__)
 
+# accelerate 是由 Hugging Face 开发的一个 Python 库，专门用于简化 PyTorch 分布式训练和混合精度训练，
+# 让你几乎不用修改原有的训练代码就能在多种硬件环境下运行。
 from accelerate import Accelerator, DeepSpeedPlugin
 from accelerate.data_loader import (
     DataLoaderStateMixin as AcceleratorDataLoaderStateMixin,
@@ -30,6 +33,7 @@ import random, numpy as np
 
 MAX_TRAINING_EPOCHS = 1_000_000
 
+# 自动用 git 把当前代码提交并打上标签（tag = 本次训练的 run name），以后能精确找回某次训练对应的代码版本
 def _auto_tag_run(run_name: str):
     """commit the code and tag the run with the run name"""
     import subprocess
@@ -51,13 +55,14 @@ def _initialize_accelerator(trainer: Trainer) -> Accelerator:
     if trainer.cfg.train.data_parallel == "fsdp":
         fsdp_plugin = trainer.get_fsdp_plugin()
     
+    # 选择分布式并行策略
     deepspeed_plugin = None
     if trainer.cfg.train.data_parallel == "deepspeed":
         # SONGLIN: use accelerate launch config instead
         ds_config_path = trainer.cfg.train.deepspeed_config 
         deepspeed_plugin = DeepSpeedPlugin(zero_stage=3, hf_ds_config=ds_config_path)
     
-
+    # 创建 Accelerator 核心对象
     accelerator = Accelerator(
         gradient_accumulation_steps=trainer.cfg.train.gradient_accumulation_steps,
         mixed_precision=trainer.cfg.train.mixed_precision,
@@ -77,6 +82,7 @@ def _initialize_accelerator(trainer: Trainer) -> Accelerator:
         accelerator.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"] = trainer.device_train_batch_size # type: ignore
 
     # Initialize the trackers unless in eval or debug mode
+    # [仅 rank 0] 初始化 WandB
     if overwatch.is_rank_zero() and not trainer.cfg.eval:
         if trainer.cfg.auto_tag_run:
             _auto_tag_run(trainer.run_name)
@@ -172,14 +178,15 @@ def train(config: LaunchConfig):
 
     if config.seed:
         overwatch.info(f"Seed everything with {config.seed}")
-        seed_everything(config.seed)
+        seed_everything(config.seed)  # 固定所有随机源
         
-    trainer = Trainer.instantiate(config, device_id)
+    trainer = Trainer.instantiate(config, device_id)  # 根据 config.train.name 动态选择具体的 Trainer 类
     overwatch.info("Initialize models ... ")
-    trainer.init_models()
+    trainer.init_models()  #加载预训练模型
+    
     accelerator = _initialize_accelerator(trainer)
     overwatch.info(f"Training configurations:")
-    overwatch.info(f"training task: '{config.train.name}'", ctx_level=1)
+    overwatch.info(f"training task: '{config.train.name}'", ctx_level=1)    #  训练任务
     overwatch.info(f"run name: {trainer.run_name}", ctx_level=1)
     overwatch.info(f"seed: {config.seed}", ctx_level=1)
     overwatch.info(f"mixed precision: {trainer.dtype}", ctx_level=1)
@@ -212,6 +219,8 @@ def train(config: LaunchConfig):
     # fmt: on
 
     trainer.prepare(accelerator)
+
+    # 断点续训
     global_step = initial_global_step = trainer.resume_from_checkpoint()[0]
     epoch_start = global_step // trainer.num_steps_per_epoch
 
@@ -231,8 +240,8 @@ def train(config: LaunchConfig):
     skip = 0
 
     for epoch in range(epoch_start, MAX_TRAINING_EPOCHS):
-        trainer.next_epoch(epoch)
-        accelerator.wait_for_everyone()
+        trainer.next_epoch(epoch)         # 更新分布式 sampler 的 epoch 编号
+        accelerator.wait_for_everyone()   # 同步所有GPU
         for local_step, batch in enumerate(trainer.train_dataloader):
             if (
                 config.train.skip_resumed_steps
@@ -241,6 +250,8 @@ def train(config: LaunchConfig):
                 # skip to inital global step
                 skip += 1
                 continue
+
+            # 核心训练步
             sync_gradients, losses = trainer.step(batch_str_to_tensor(batch), global_step, local_step)
             
             if sync_gradients:
@@ -326,7 +337,7 @@ if __name__ == "__main__":
     # Print and log important environment variables
     env_vars_to_track = [
         "OMP_NUM_THREADS", "HF_HOME", "TORCH_HOME", "HF_TOKEN", "HF_LEROBOT_HOME",
-        "DATA_HOME", "UV_CACHE_DIR", "WANDB_API_KEY",
+        "WE_HOME", "DATA_HOME", "UV_CACHE_DIR", "WANDB_API_KEY",
         "PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "CUDA_VISIBLE_DEVICES",
         "WORLD_SIZE", "LOCAL_WORLD_SIZE", "RANK", "LOCAL_RANK", "MASTER_ADDR", "MASTER_PORT"
     ]

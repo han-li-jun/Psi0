@@ -8,7 +8,7 @@ from psi.config.transform import DataTransform
 from psi.config import transform as pt
 
 class DynamicDataTransform(DataTransform):
-    repack: pt.RealRepackTransform
+    repack: pt.RealRepackTransform  # 字段声明，这是 Pydantic 的语法，会自动生成init
     field: pt.ActionStateTransform
     model: pt.Psi0ModelTransform
 

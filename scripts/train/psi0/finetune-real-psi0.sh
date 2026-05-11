@@ -1,9 +1,18 @@
 #!/bin/bash
 
 export OMP_NUM_THREADS=32
-export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 
 source .venv-psi/bin/activate
+
+# Load .env so PSI_MODEL_ROOT / PSI_HOME etc. apply (run from repo root)
+if [ -f "$(dirname "$0")/../../../.env" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$(dirname "$0")/../../../.env"
+  set +a
+fi
+PSI_MODEL_ROOT="${PSI_MODEL_ROOT:-/data/vepfs/public/lijun.han/psi-model/psi0}"
 
 NPROC_PER_NODE=$(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
 ulimit -n 65535
@@ -60,8 +69,8 @@ finetune_real_psi0_config \
 --data.transform.model.img-aug \
 --data.transform.model.resize.size 240 320 \
 --data.transform.model.center_crop.size 240 320 \
---model.model_name_or_path=/hfm/cache/checkpoints/psi0/pre.fast.1by1.2601091803.ckpt.ego200k.he30k \
---model.pretrained-action-header-path=/hfm/cache/checkpoints/psi0/postpre.1by1.pad36.2601131206.ckpt.he30k \
+--model.model_name_or_path=$PSI_MODEL_ROOT/pre.fast.1by1.2601091803.ckpt.ego200k.he30k \
+--model.pretrained-action-header-path=$PSI_MODEL_ROOT/postpre.1by1.pad36.2601131206.ckpt.he30k \
 --model.noise-scheduler=flow \
 --model.train-diffusion-steps=1000 \
 --model.n_conditions=0 \
